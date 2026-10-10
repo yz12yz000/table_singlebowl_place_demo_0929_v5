@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Plan one observation, or execute one object then observe again.
+"""Plan or execute one independently observed bowl for one selected zone.
 
 The default is plan-only: no controller switching, arm motion or gripper command.
-Execution uses the existing six-stage task. Only pre-motion candidate exhaustion
-and explicit geometry failures may request a bounded fresh observation.
+Zone execution includes the six grasp/place segments and a fixed-joint return
+home. Only pre-motion candidate exhaustion and explicit geometry failures may
+request a bounded fresh observation; a completed zone task exits.
 """
 import argparse
 from dataclasses import asdict, replace
@@ -31,6 +32,7 @@ from rim_locator.candidate_protocol import decode_candidate_batch, encode_candid
 from grasp_executor.config import load_config as load_grasp_config
 from grasp_executor.process_guard import process_start_ticks
 from place_rounds import (RoundBudget, RoundLimits, context_matches,
+                          load_place_zone, load_release_coordinates,
                           recoverable_failure, select_candidate_groups)
 
 
@@ -130,12 +132,13 @@ def round_configs(vision, rim, grasp, namespace, timeout, execute):
 class ObservationRound:
     """Own one namespace, one set of processes, and one immutable observation."""
     def __init__(self, node, root, output, task_id, number, configs, deadline,
-                 source_not_before_ns, execute, interrupted, source_paths):
+                 source_not_before_ns, execute, interrupted, source_paths, single_bowl=False):
         self.node, self.root, self.output = node, root, output
         self.task_id, self.observation_id = task_id, f'{task_id}/round_{number:04d}'
         self.namespace = f'/place_demo_{task_id}/round_{number:04d}'
         self.deadline, self.barrier = deadline, source_not_before_ns
         self.execute, self.interrupted = execute, interrupted
+        self.single_bowl = single_bowl
         self.configs, self.source_paths = configs, source_paths
         self.statuses, self.history, self.previews, self.intermediate = {}, [], [], []
         self.processes, self.logs, self.subscriptions = {}, [], []
@@ -213,7 +216,8 @@ class ObservationRound:
     def on_preview(self, message):
         preview = {'segments': len(message.trajectory),
                    'points': [len(t.joint_trajectory.points) for t in message.trajectory]}
-        (self.previews if preview['segments'] == 6 else self.intermediate).append(preview)
+        expected = 7 if self.configs['grasp'].return_home_joint_positions is not None else 6
+        (self.previews if preview['segments'] == expected else self.intermediate).append(preview)
 
     def save_image(self, message):
         stamp = message.header.stamp.sec * 10**9 + message.header.stamp.nanosec
@@ -228,6 +232,7 @@ class ObservationRound:
             path = self.output / 'detection_overlay.png'
             image.save(path)
             self.result['detection_overlay'] = str(path)
+            self.result['detection_image_header'] = dict(stamp_ns=stamp, frame_id=message.header.frame_id)
         except Exception as exc:
             self.result.setdefault('debug_capture_errors', []).append(str(exc))
 
@@ -245,6 +250,39 @@ class ObservationRound:
             self.result['base_cloud'] = str(path)
         except Exception as exc:
             self.result.setdefault('debug_capture_errors', []).append(str(exc))
+
+    def save_selected_pose_overlay(self):
+        """Diagnostic failures never change a robot task's execution outcome."""
+        try:
+            from grasp_pose_overlay import selected_grasp_poses, render_grasp_overlay
+            poses = selected_grasp_poses(self.selected, self.history, self.configs['grasp'])
+            if not poses:
+                self.result['grasp_pose_overlay_status'] = 'no_selected_pose'
+                return
+            camera = self.statuses.get('yolo_vision', {}).get('camera_projection')
+            transform = self.statuses.get('rim_locator', {}).get('cloud_transform')
+            metadata = dict(task_id=self.task_id, observation_id=self.observation_id,
+                            camera_projection=camera, cloud_transform=transform, poses=poses)
+            if 'detection_overlay' in self.result:
+                import cv2
+                image = cv2.imread(self.result['detection_overlay'])
+                if image is None:
+                    raise ValueError('detection_image_unreadable')
+                output, metadata['poses'] = render_grasp_overlay(image, poses, camera, transform,
+                    self.result.get('detection_image_header'))
+                path = self.output / 'grasp_pose_overlay.png'
+                if not cv2.imwrite(str(path), output):
+                    raise OSError('grasp_pose_image_write_failed')
+                self.result['grasp_pose_overlay'] = str(path)
+                self.result['grasp_pose_overlay_status'] = ('annotated' if all(
+                    'projection_error' not in pose for pose in metadata['poses']) else 'coordinates_only')
+            else:
+                self.result['grasp_pose_overlay_status'] = 'image_unavailable'
+            path = self.output / 'selected_grasp_pose.json'
+            write_json(path, metadata, self.source_paths)
+            self.result['selected_grasp_pose'] = str(path)
+        except Exception as exc:
+            self.result.setdefault('debug_capture_errors', []).append('grasp_pose_overlay:' + str(exc))
 
     def spin(self):
         if self.interrupted.is_set():
@@ -291,12 +329,26 @@ class ObservationRound:
     def prepare_controller(self):
         process = self.start('position_control')
         stop = min(self.deadline, time.monotonic() + 240.)
-        while process.poll() is None:
-            if time.monotonic() >= stop:
-                raise TimeoutError('controller_preparation_timeout')
-            self.spin()
-        if process.returncode != 0:
-            raise RuntimeError('controller_preparation_failed')
+        try:
+            while process.poll() is None:
+                if time.monotonic() >= stop:
+                    raise TimeoutError('controller_preparation_timeout')
+                self.spin()
+            if process.returncode != 0:
+                raise RuntimeError('controller_preparation_failed')
+        except Exception:
+            path = self.output / 'position_control.log'
+            self.result['controller_preparation_log'] = str(path)
+            self.result['controller_exit_code'] = process.poll()
+            try:
+                with path.open('rb') as stream:
+                    stream.seek(0, os.SEEK_END)
+                    stream.seek(max(0, stream.tell() - 4096))
+                    detail = stream.read().decode('utf-8', errors='replace')
+                self.result['controller_error_detail'] = '\n'.join(detail.splitlines()[-12:]).strip()
+            except OSError as exc:
+                self.result['controller_error_detail'] = '控制器日志无法读取：' + str(exc)
+            raise
 
     def run(self, controller_prepared):
         self.attach()
@@ -310,12 +362,17 @@ class ObservationRound:
                 # DDS does not order different topics. Keep the all-rejected
                 # protocol message before retiring this round's subscriptions.
                 rim_status = self.statuses.get('rim_locator', {})
-                if rim_status.get('reason') == 'pose_not_found:no_valid_object' and self.batch is None:
+                if rim_status.get('reason') == 'pose_not_found:no_valid_object':
                     delivery_deadline = min(self.deadline, time.monotonic() + 1.)
-                    while self.batch is None and time.monotonic() < delivery_deadline:
+                    def evidence_pending():
+                        return self.batch is None or (self.configs['rim'].publish_debug
+                                                      and 'base_cloud' not in self.result)
+                    while evidence_pending() and time.monotonic() < delivery_deadline:
                         self.spin()
                     if self.batch is None:
                         raise RuntimeError('missing_rejected_candidate_batch')
+                    if self.configs['rim'].publish_debug and 'base_cloud' not in self.result:
+                        self.result.setdefault('debug_capture_errors', []).append('base_cloud_delivery_timeout')
                 self.result['kind'] = 'retry' if recoverable_failure(self.statuses) else 'failed'
                 self.result['error'] = next((s.get('reason') or s['status'] for s in self.statuses.values()
                     if s.get('status') in ('failed', 'candidates_exhausted')), 'pipeline_failed')
@@ -340,6 +397,11 @@ class ObservationRound:
                 located_ids = {obj['object_id'] for obj in self.batch['objects'] + self.batch['rejected']}
                 if accepted_ids != located_ids or len(accepted_ids) != vision.get('object_count'):
                     raise RuntimeError('perception_object_mismatch')
+                if self.single_bowl and (vision.get('detected_count') != 1
+                        or vision.get('object_count') != 1
+                        or len(self.batch['objects']) != 1 or self.batch['rejected']
+                        or vision.get('rejected') or self.statuses['rim_locator'].get('rejected')):
+                    raise RuntimeError('single_bowl_required')
                 self.selected = select_candidate_groups(self.batch, self.configs['grasp'].grasp_offset, self.execute)
                 write_json(self.output / 'selected_candidates.json', self.selected, self.source_paths)
                 if self.execute and not controller_prepared:
@@ -395,6 +457,7 @@ class ObservationRound:
             candidate_attempt_count=executor.get('candidate_attempt_count', 0),
             rejected={name: self.statuses.get(name, {}).get('rejected', [])
                       for name in ('yolo_vision', 'rim_locator')})
+        self.save_selected_pose_overlay()
         try:
             write_json(self.output / 'candidate_attempts.json', executor.get('candidate_failures', []), self.source_paths)
         except OSError as exc:
@@ -411,11 +474,17 @@ class ObservationRound:
 
 def main(execute=False):
     root = Path(__file__).resolve().parents[1]
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--output-dir', default=('debug_output/place_execution/' if execute else
                          'debug_output/place_validation/') + time.strftime('%Y%m%d_%H%M%S'))
     parser.add_argument('--timeout', type=float, default=None)
     parser.add_argument('--vision-config', default=None)
+    parser.add_argument('--target-zone', default=None, help='使用已保存的左上、左下、中间、右上、右下或blue点')
+    parser.add_argument('--x', type=float, default=None, help='释放点 base/tool0 X，单位米；须与 --y --z 一起使用')
+    parser.add_argument('--y', type=float, default=None, help='释放点 base/tool0 Y，单位米')
+    parser.add_argument('--z', type=float, default=None, help='释放点 base/tool0 Z，单位米')
+    parser.add_argument('--place-zones-config', default=None)
+    parser.add_argument('--legacy-multi', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--execute', action='store_true', default=execute)
     parser.add_argument('--max-reobservations', type=int, default=2)
     parser.add_argument('--max-observation-rounds', type=int, default=30)
@@ -427,13 +496,28 @@ def main(execute=False):
     vision_default = root / 'src/yolo_vision/config/place_config.json'
     rim_path = root / 'src/rim_locator/config/place_config.json'
     grasp_path = root / 'src/grasp_executor/config/place_config.json'
+    zones_path = (Path(args.place_zones_config).expanduser().resolve() if args.place_zones_config
+                  else root / 'src/grasp_executor/config/place_zones.json')
     override = Path(args.vision_config).expanduser().resolve() if args.vision_config else None
+    single_bowl = not args.legacy_multi
+    coordinates = (args.x, args.y, args.z)
+    has_coordinates = any(value is not None for value in coordinates)
     try:
+        if args.legacy_multi and (args.target_zone is not None or has_coordinates):
+            raise ValueError('legacy_multi_conflicts_with_place_target')
+        if single_bowl and args.target_zone is None and not has_coordinates:
+            raise ValueError('place_target_required:--target-zone or --x --y --z')
+        if has_coordinates and (args.target_zone is not None or any(value is None for value in coordinates)):
+            raise ValueError('use_either_target_zone_or_complete_xyz')
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('timeout must be positive and finite')
         limits = RoundLimits(args.max_reobservations, args.max_observation_rounds, args.max_completed_objects)
         vision, rim, grasp = load_effective_config(vision_default, override), load_rim_config(rim_path), load_grasp_config(grasp_path)
-        sources = {p.resolve() for p in (vision_default, rim_path, grasp_path, override) if p is not None}
+        if single_bowl:
+            grasp = (load_release_coordinates(zones_path, coordinates, grasp) if has_coordinates
+                     else load_place_zone(zones_path, args.target_zone, grasp))
+        sources = {p.resolve() for p in (vision_default, rim_path, grasp_path, override,
+                                         zones_path if single_bowl else None) if p is not None}
         first_output = output / 'round_0001'
         protected_outputs = [output / 'task_config.json', output / 'result.json',
                              *[first_output / f'effective_{name}_config.json' for name in ('vision', 'rim', 'grasp')]]
@@ -446,7 +530,12 @@ def main(execute=False):
     task_id = uuid.uuid4().hex
     budget = RoundBudget(time.monotonic() + timeout, limits)
     result = {'task_id': task_id, 'mode': 'execute' if execute else 'plan_only',
-              'hardware_motion_requested': execute, 'selection': 'all_detected',
+              'hardware_motion_requested': execute,
+              'selection': 'single_bowl' if single_bowl else 'all_detected',
+              'target_zone': args.target_zone,
+              'release_xyz_base_tool0': dict(zip('xyz', coordinates)) if has_coordinates else None,
+              'return_home_requested': grasp.return_home_joint_positions is not None,
+              'place_zones_config': str(zones_path) if single_bowl else None,
               'vision_config_sources': {'base': str(vision_default), 'override': str(override) if override else None},
               'pick_region': vision.inference_roi, 'placement_region_separation_verified': False,
               'grasp_verified': False, 'placement_verified': False, 'rounds': [],
@@ -458,11 +547,14 @@ def main(execute=False):
         with TaskLock():
             output.mkdir(parents=True, exist_ok=True)
             write_json(output / 'task_config.json', {'task_id': task_id, 'timeout': timeout,
+                'target_zone': args.target_zone,
+                'release_xyz_base_tool0': result['release_xyz_base_tool0'],
                 'limits': asdict(limits), 'vision': asdict(vision), 'rim': asdict(rim),
                 'grasp': asdict(replace(grasp, plan_only=not execute)),
                 'vision_config_sources': result['vision_config_sources']}, sources)
             owns_output = True
-            print('抓放每次只处理最近一只；完成退回后重新观测。预览只规划一份快照。',
+            print(('单碗单次抓放，目标：' + (args.target_zone or str(result['release_xyz_base_tool0'])) if single_bowl else
+                   '抓放每次只处理最近一只；完成退回后重新观测。预览只规划一份快照。'),
                   '取物 ROI:', vision.inference_roi, flush=True)
             rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
             initialized = True
@@ -496,7 +588,7 @@ def main(execute=False):
                 namespace = f'/place_demo_{task_id}/round_{number:04d}'
                 configs = round_configs(vision, rim, grasp, namespace, timeout, execute)
                 observation = ObservationRound(node, root, output / f'round_{number:04d}', task_id, number,
-                    configs, budget.deadline, barrier, execute, interrupted, sources)
+                    configs, budget.deadline, barrier, execute, interrupted, sources, single_bowl)
                 try:
                     controller_prepared = observation.run(controller_prepared)
                 except Exception as exc:
@@ -517,8 +609,21 @@ def main(execute=False):
                 if current['completed_count']:
                     budget.complete_object(has_rejections)
                 if kind == 'completed':
+                    if single_bowl:
+                        result.update(passed=not budget.unresolved_rejections,
+                            outcome='completed' if not budget.unresolved_rejections else 'partial',
+                            error='' if not budget.unresolved_rejections else 'prior_rejection_unresolved')
+                        break
                     continue
                 if kind == 'empty':
+                    if single_bowl:
+                        if budget.retry_observation(time.monotonic(), record_failure=False):
+                            print('未检测到碗，重新采集识别（重试 '
+                                  f'{budget.reobservations_without_progress}/{limits.max_reobservations}）',
+                                  flush=True)
+                            continue
+                        result.update(passed=False, outcome='no_targets', error='single_bowl_required')
+                        break
                     result['passed'], result['outcome'], result['error'] = budget.empty_result()
                     break
                 if kind == 'planned':
@@ -535,12 +640,20 @@ def main(execute=False):
         result.update(passed=False, error=str(exc), outcome='partial' if budget.completed_count else 'failed')
     finally:
         result.update(completed_count=budget.completed_count, observation_count=budget.observation_count,
+            returned_home=bool(execute and grasp.return_home_joint_positions is not None
+                               and result['passed'] and budget.completed_count == 1),
             reobservations_without_progress=budget.reobservations_without_progress,
             unresolved_rejections=budget.unresolved_rejections,
             candidate_attempt_count=sum(r.get('candidate_attempt_count', 0) for r in result['rounds']),
             preview_batches=[p for r in result['rounds'] for p in r['preview_batches']],
             intermediate_previews=[p for r in result['rounds'] for p in r['intermediate_previews']])
         result['stop_reason'] = result.get('error', '')
+        if result['rounds']:
+            last_round = result['rounds'][-1]
+            for key in ('controller_preparation_log', 'controller_exit_code', 'controller_error_detail',
+                        'grasp_pose_overlay', 'grasp_pose_overlay_status', 'selected_grasp_pose'):
+                if key in last_round:
+                    result[key] = last_round[key]
         if node is not None:
             node.destroy_node()
         if initialized:
@@ -549,7 +662,15 @@ def main(execute=False):
             signal.signal(sig, handler)
         if owns_output and not (output / 'result.json').exists():
             write_json(output / 'result.json', result, sources)
+    if not result['passed']:
+        print('任务失败：' + result.get('error', 'unknown_error'), flush=True)
+        if result.get('controller_error_detail'):
+            print(result['controller_error_detail'], flush=True)
+        if result.get('controller_preparation_log'):
+            print('控制器准备日志：' + result['controller_preparation_log'], flush=True)
     print('Result:', output / 'result.json', flush=True)
+    if result.get('grasp_pose_overlay'):
+        print('最终抓取 pose 图片：' + result['grasp_pose_overlay'], flush=True)
     return 0 if result['passed'] else 1
 
 

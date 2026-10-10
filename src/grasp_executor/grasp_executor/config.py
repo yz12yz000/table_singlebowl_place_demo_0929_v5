@@ -35,9 +35,9 @@ class GraspConfig:
     controller_namespace: str = ""
     controller_tip_frame: str = "auto"
     command_rate: float = 50.0
-    approach_speed: float = 0.03
-    descend_speed: float = 0.01
-    angular_speed: float = 0.15
+    approach_speed: float = 0.045
+    descend_speed: float = 0.015
+    angular_speed: float = 0.225
     position_tolerance: float = 0.002
     orientation_tolerance: float = 0.02
     settle_time: float = 0.25
@@ -61,7 +61,7 @@ class GraspConfig:
     ik_attempts: int = 8
     ik_timeout: float = 0.25
     max_ik_plans: int = 3
-    velocity_scaling: float = 0.1
+    velocity_scaling: float = 0.15
     acceleration_scaling: float = 0.1
     cartesian_step: float = 0.005
     jump_threshold: float = 2.0
@@ -69,7 +69,7 @@ class GraspConfig:
     validation_joint_step: float = 0.04
     validation_time_step: float = 0.05
     max_validation_samples: int = 5000
-    max_joint_velocity: float = 0.3
+    max_joint_velocity: float = 0.45
     max_joint_acceleration: float = 0.3
     start_joint_tolerance: float = 0.01
     gripper_settle_time: float = 1.0
@@ -86,8 +86,23 @@ class GraspConfig:
     place_drop_distance: float = 0.20
     place_dwell_time: float = 1.0
     place_retreat: bool = True
+    return_home_joint_positions: dict | None = None
+    return_home_position: dict | None = None
+    return_home_orientation: dict | None = None
 
     def __post_init__(self):
+        home = (self.return_home_joint_positions, self.return_home_position, self.return_home_orientation)
+        if any(value is not None for value in home):
+            if any(value is None for value in home):
+                raise ValueError('incomplete_return_home_config')
+            vector(self.return_home_joint_positions, ('shoulder_pan_joint', 'shoulder_lift_joint',
+                   'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'), 'return_home_joint_positions')
+            vector(self.return_home_position, 'xyz', 'return_home_position')
+            q = vector(self.return_home_orientation, 'xyzw', 'return_home_orientation')
+            if abs(math.hypot(*q) - 1.) > .01:
+                raise ValueError('invalid_return_home_orientation')
+            if not self.place_retreat:
+                raise ValueError('return_home_requires_place_retreat')
         for name in ('ik_attempts', 'max_ik_plans'):
             if type(getattr(self, name)) is not int or not 1 <= getattr(self, name) <= 16:
                 raise ValueError('invalid_config:' + name)

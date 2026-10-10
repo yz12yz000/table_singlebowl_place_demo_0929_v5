@@ -21,7 +21,7 @@ from .config import load_config, resolve_model_path
 from .pointcloud import extract_object_points, make_cloud, read_xyz, read_aligned_depth_xyz
 from .segmentation import Segmenter
 from .sensor_input import SerializedSensor, raw_subscriber
-from .diagnostics import detection_debug
+from .diagnostics import detection_debug, projection_metadata
 
 
 def retained_qos():
@@ -201,6 +201,7 @@ class VisionNode(Node):
                 all_ids.append(np.full(len(points), object_id, dtype=np.uint32))
                 accepted.append({"object_id": object_id, "point_count": len(points),
                                  "confidence": result.confidence, **depth_details})
+            projection_details = {}
             if self.config.publish_debug:
                 combined_mask, overlay = detection_debug(bgr, results, xyz)
                 mask_message = self.bridge.cv2_to_imgmsg(combined_mask, encoding="mono8")
@@ -211,6 +212,11 @@ class VisionNode(Node):
                     raise TimeoutError("input_timeout")
                 self.mask_pub.publish(mask_message)
                 self.overlay_pub.publish(overlay_message)
+                try:
+                    projection_details['camera_projection'] = projection_metadata(
+                        xyz, image.header, cloud.header, camera_info)
+                except Exception as exc:
+                    projection_details['camera_projection_error'] = str(exc)
             if self.deadline_expired():
                 raise TimeoutError("input_timeout")
             if not all_points:
@@ -222,6 +228,7 @@ class VisionNode(Node):
             self.publisher.publish(output)
             self.report("success", detected_count=len(results), object_count=len(accepted), objects=accepted,
                         class_name=self.config.target_class, rejected=rejected,
+                        **projection_details,
                         source_stamp_ns=cloud.header.stamp.sec*1_000_000_000+cloud.header.stamp.nanosec,
                         rgb_depth_delta_s=abs((image.header.stamp.sec-cloud.header.stamp.sec) +
                                               (image.header.stamp.nanosec-cloud.header.stamp.nanosec)/1e9))
