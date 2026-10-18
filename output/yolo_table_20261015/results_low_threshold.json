@@ -1,0 +1,161 @@
+{
+  "model": "YOLO26n-seg OpenVINO",
+  "confidence_threshold": 0.1,
+  "image_size": [
+    1280,
+    800
+  ],
+  "roi_xyxy": [
+    340,
+    380,
+    930,
+    610
+  ],
+  "source_image": "raw.png",
+  "instances": [
+    {
+      "id": 1,
+      "class_name": "spoon",
+      "confidence": 0.5088245868682861,
+      "bbox_xyxy": [
+        500,
+        420,
+        546,
+        507
+      ],
+      "mask_pixels": 2108
+    },
+    {
+      "id": 2,
+      "class_name": "bowl",
+      "confidence": 0.40689074993133545,
+      "bbox_xyxy": [
+        575,
+        396,
+        652,
+        466
+      ],
+      "mask_pixels": 3904
+    },
+    {
+      "id": 3,
+      "class_name": "bowl",
+      "confidence": 0.3144833445549011,
+      "bbox_xyxy": [
+        741,
+        399,
+        850,
+        477
+      ],
+      "mask_pixels": 5877
+    },
+    {
+      "id": 4,
+      "class_name": "scissors",
+      "confidence": 0.2736096680164337,
+      "bbox_xyxy": [
+        708,
+        456,
+        795,
+        532
+      ],
+      "mask_pixels": 2460
+    },
+    {
+      "id": 5,
+      "class_name": "bowl",
+      "confidence": 0.26239970326423645,
+      "bbox_xyxy": [
+        823,
+        485,
+        880,
+        536
+      ],
+      "mask_pixels": 2278
+    },
+    {
+      "id": 6,
+      "class_name": "cup",
+      "confidence": 0.19012725353240967,
+      "bbox_xyxy": [
+        824,
+        485,
+        880,
+        537
+      ],
+      "mask_pixels": 2295
+    },
+    {
+      "id": 7,
+      "class_name": "sink",
+      "confidence": 0.18220409750938416,
+      "bbox_xyxy": [
+        356,
+        393,
+        591,
+        527
+      ],
+      "mask_pixels": 25189
+    },
+    {
+      "id": 8,
+      "class_name": "dining table",
+      "confidence": 0.14282411336898804,
+      "bbox_xyxy": [
+        358,
+        390,
+        921,
+        600
+      ],
+      "mask_pixels": 89766
+    },
+    {
+      "id": 9,
+      "class_name": "bottle",
+      "confidence": 0.12687037885189056,
+      "bbox_xyxy": [
+        340,
+        526,
+        425,
+        608
+      ],
+      "mask_pixels": 5300
+    },
+    {
+      "id": 10,
+      "class_name": "scissors",
+      "confidence": 0.11758173257112503,
+      "bbox_xyxy": [
+        753,
+        400,
+        843,
+        450
+      ],
+      "mask_pixels": 1000
+    },
+    {
+      "id": 11,
+      "class_name": "bowl",
+      "confidence": 0.11668141931295395,
+      "bbox_xyxy": [
+        582,
+        396,
+        652,
+        438
+      ],
+      "mask_pixels": 2225
+    },
+    {
+      "id": 12,
+      "class_name": "spoon",
+      "confidence": 0.11413092166185379,
+      "bbox_xyxy": [
+        707,
+        456,
+        783,
+        532
+      ],
+      "mask_pixels": 2020
+    }
+  ]
+}

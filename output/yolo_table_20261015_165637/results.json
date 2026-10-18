@@ -1,0 +1,103 @@
+{
+  "model": "YOLO26n-seg OpenVINO",
+  "confidence_threshold": 0.25,
+  "image_size": [
+    1280,
+    800
+  ],
+  "roi_xyxy": [
+    340,
+    380,
+    930,
+    610
+  ],
+  "source_image": "raw.png",
+  "stamp_sec": 1792054600,
+  "stamp_nanosec": 876069888,
+  "instances": [
+    {
+      "id": 1,
+      "class_name": "bowl",
+      "confidence": 0.5677973628044128,
+      "bbox_xyxy": [
+        758,
+        401,
+        854,
+        479
+      ],
+      "mask_pixels": 5981
+    },
+    {
+      "id": 2,
+      "class_name": "bowl",
+      "confidence": 0.5212470293045044,
+      "bbox_xyxy": [
+        576,
+        394,
+        646,
+        462
+      ],
+      "mask_pixels": 3597
+    },
+    {
+      "id": 3,
+      "class_name": "bottle",
+      "confidence": 0.413166344165802,
+      "bbox_xyxy": [
+        340,
+        527,
+        424,
+        607
+      ],
+      "mask_pixels": 5169
+    },
+    {
+      "id": 4,
+      "class_name": "bowl",
+      "confidence": 0.359232634305954,
+      "bbox_xyxy": [
+        823,
+        486,
+        880,
+        535
+      ],
+      "mask_pixels": 2247
+    },
+    {
+      "id": 5,
+      "class_name": "cell phone",
+      "confidence": 0.32678544521331787,
+      "bbox_xyxy": [
+        698,
+        380,
+        742,
+        405
+      ],
+      "mask_pixels": 862
+    },
+    {
+      "id": 6,
+      "class_name": "dining table",
+      "confidence": 0.28168997168540955,
+      "bbox_xyxy": [
+        358,
+        380,
+        926,
+        600
+      ],
+      "mask_pixels": 79670
+    },
+    {
+      "id": 7,
+      "class_name": "spoon",
+      "confidence": 0.25700023770332336,
+      "bbox_xyxy": [
+        598,
+        380,
+        636,
+        445
+      ],
+      "mask_pixels": 1581
+    }
+  ]
+}

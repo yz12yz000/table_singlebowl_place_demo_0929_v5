@@ -1,0 +1,77 @@
+{
+  "model": "YOLO26n-seg OpenVINO",
+  "confidence_threshold": 0.25,
+  "image_size": [
+    1280,
+    800
+  ],
+  "roi_xyxy": [
+    340,
+    380,
+    930,
+    610
+  ],
+  "source_image": "raw.png",
+  "instances": [
+    {
+      "id": 1,
+      "class_name": "spoon",
+      "confidence": 0.5088245868682861,
+      "bbox_xyxy": [
+        500,
+        420,
+        546,
+        507
+      ],
+      "mask_pixels": 2108
+    },
+    {
+      "id": 2,
+      "class_name": "bowl",
+      "confidence": 0.40689074993133545,
+      "bbox_xyxy": [
+        575,
+        396,
+        652,
+        466
+      ],
+      "mask_pixels": 3904
+    },
+    {
+      "id": 3,
+      "class_name": "bowl",
+      "confidence": 0.3144833445549011,
+      "bbox_xyxy": [
+        741,
+        399,
+        850,
+        477
+      ],
+      "mask_pixels": 5877
+    },
+    {
+      "id": 4,
+      "class_name": "scissors",
+      "confidence": 0.2736096680164337,
+      "bbox_xyxy": [
+        708,
+        456,
+        795,
+        532
+      ],
+      "mask_pixels": 2460
+    },
+    {
+      "id": 5,
+      "class_name": "bowl",
+      "confidence": 0.26239970326423645,
+      "bbox_xyxy": [
+        823,
+        485,
+        880,
+        536
+      ],
+      "mask_pixels": 2278
+    }
+  ]
+}
